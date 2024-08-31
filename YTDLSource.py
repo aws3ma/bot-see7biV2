@@ -2,11 +2,8 @@ import asyncio
 from functools import partial
 import discord
 import yt_dlp
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+
 yt_dlp.utils.bug_reports_message = lambda: ''
-client_credentials_manager = SpotifyClientCredentials(client_id="d90b3da85a5f45c0868ac21cbd96e238",client_secret="57af2268d1914c4fa371e68f4df334dc")
-sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'downloads/%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -67,5 +64,5 @@ class YTDLSource(discord.PCMVolumeTransformer):
         Since Youtube Streaming links expire."""
         loop = loop or asyncio.get_event_loop()
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url=data['webpage_url'],download=False))
-        return cls(discord.FFmpegPCMAudio(executable="./ffmpeg.exe", source=data['url']),
+        return cls(discord.FFmpegPCMAudio(executable='./ffmpeg.exe', source=data['url'], **ffmpeg_options),
                    data=data)

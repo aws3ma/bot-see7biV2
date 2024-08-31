@@ -24,6 +24,7 @@ ytdl_format_options = {
     'default_search': 'auto',
     # bind to ipv4 since ipv6 addresses cause issues sometimes
     'source_address': '0.0.0.0',
+    'age_limit': 18 
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
