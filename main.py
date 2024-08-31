@@ -11,6 +11,8 @@ from custom_exceptions import InvalidVoiceChannel, VoiceConnectionError
 
 # Suppress noise about console usage from errors
 yt_dlp.utils.bug_reports_message = lambda: ''
+username = os.getenv("YT_USERNAME", default=None)
+password = os.getenv("YT_PASSWORD", default=None)
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'downloads/%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -24,7 +26,9 @@ ytdl_format_options = {
     'default_search': 'auto',
     # bind to ipv4 since ipv6 addresses cause issues sometimes
     'source_address': '0.0.0.0',
-    'age_limit': 18 
+    'age_limit': 18,
+    'u': username,
+    'p': password,
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -113,6 +117,7 @@ class Music(commands.Cog):
                 loop=self.bot.loop,
                 stream=True)
             await player.queue.put(source)
+    
     @commands.command(name='volume')
     async def volume(self, ctx, volume: int):
         """Changes the player's volume"""
