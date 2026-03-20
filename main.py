@@ -2,10 +2,11 @@ import asyncio
 import itertools
 import os
 import random
+from shlex import join
 import discord
 from discord.ext import commands
 from MusicPlayer import MusicPlayer
-from YTDLSource import YTDLSource
+from YTDLSource import YTDLSource, ytdl
 from custom_exceptions import InvalidVoiceChannel, VoiceConnectionError
 
 # Suppress noise about console usage from errors
@@ -40,82 +41,117 @@ class Music(commands.Cog):
 
         return player
 
+    @commands.command(name='test')
+    async def test(self, ctx):
+        """Test command to verify bot is receiving commands"""
+        await ctx.send(f'✅ Command received by {ctx.author}!')
+
     @commands.command(name='join')
     async def join(self, ctx, *, channel: discord.VoiceChannel = None):
         """Joins a voice channel"""
         if not channel:
-            try:
+            if ctx.author.voice and ctx.author.voice.channel:
                 channel = ctx.author.voice.channel
-            except AttributeError:
-                raise InvalidVoiceChannel(
-                    'No channel to join. Please either specify a valid channel or join one.'
-                )
+            else:
+                await ctx.send('❌ You must specify a voice channel or join one first.')
+                return
 
         vc = ctx.voice_client
 
-        if vc:
-            if vc.channel.id == channel.id:
-                return
-            try:
+        try:
+            if vc:
+                if vc.channel.id == channel.id:
+                    await ctx.send(f'Already in {channel}.', delete_after=20)
+                    return
                 await vc.move_to(channel)
-            except asyncio.TimeoutError:
-                raise VoiceConnectionError(
-                    f'Moving to channel: <{channel}> timed out.')
-        else:
-            try:
+            else:
                 await channel.connect()
-            except asyncio.TimeoutError:
-                raise VoiceConnectionError(
-                    f'Connecting to channel: <{channel}> timed out.')
 
-        await ctx.send(f'Connected to : **{channel}**', delete_after=20)
+            await ctx.send(f'Connected to : **{channel}**', delete_after=20)
+
+        except discord.Forbidden:
+            await ctx.send('❌ I do not have permission to connect/speak in that channel.')
+        except discord.HTTPException as exc:
+            await ctx.send(f'❌ Failed to connect/move: {exc}')
+        except asyncio.TimeoutError:
+            await ctx.send('❌ Connection timed out.')
+        except Exception as exc:
+            print(f'join failed: {type(exc).__name__}: {exc}')
+            await ctx.send(f'❌ Unexpected join error: {type(exc).__name__}: {exc}')
 
     @commands.command(name='p')
-    async def stream(self, ctx, *, url):
-        """Streams from a url (same as yt, but doesn't predownload)"""
-        await ctx.typing()
-        player = self.get_player(ctx)
-        loop = asyncio.get_event_loop()
-        newData = []
+    async def stream(self, ctx, *, query):
+        """Streams from a URL or searches YouTube for a song"""
+        await ctx.send(f'✅ Processing: `{query}`')
+        try:
+            await ctx.typing()
+            player = self.get_player(ctx)
+            loop = asyncio.get_event_loop()
+            newData = []
+            
+            # Check if it's a URL or a search query
+            is_url = 'http' in query or 'youtube.com' in query or 'youtu.be' in query
+            
+            if not is_url:
+                # It's a search query, do flat search first
+                search_data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url=f"ytsearch:{query}", download=False))
+                
+                if not search_data or 'entries' not in search_data or len(search_data['entries']) == 0:
+                    await ctx.send(f"❌ No results for `{query}`")
+                    return
+                
+                # Get the first result's URL
+                first_result = search_data['entries'][0]
+                query = first_result.get('url') or f"https://www.youtube.com/watch?v={first_result.get('id')}"
 
-        if 'list' in url:
-            if 'watch' in url:
-                first_ghneya = YTDLSource.extract_first_video_url(playlist_url=url)
+            if 'list' in query:
+                if 'watch' in query:
+                    first_ghneya = YTDLSource.extract_first_video_url(playlist_url=query)
+                    source = await YTDLSource.from_url(
+                        url=first_ghneya,
+                        loop=self.bot.loop,
+                        stream=True
+                    )
+                    if source:
+                        await player.queue.put(source)
+
+                data = await YTDLSource.getData(url=query,
+                                                loop=self.bot.loop,
+                                                stream=True)
+                if 'entries' in data:
+                    newData = data['entries']
+
+            if (len(newData) != 0):
+                random.shuffle(newData)
+
+                async def queue_rest(entries):
+                    for ghneya in entries[1:]:
+                        if ghneya is not None:
+                            source = await YTDLSource.getData(
+                                url=ghneya["url"],
+                                loop=self.bot.loop,
+                                stream=True
+                            )
+                            await player.queue.put(source)
+                self.bot.loop.create_task(queue_rest(newData))
+
+            else:
                 source = await YTDLSource.from_url(
-                    url=first_ghneya,
+                    url=query,
                     loop=self.bot.loop,
                     stream=True
                 )
-                await player.queue.put(source)
-
-            data = await YTDLSource.getData(url=url,
-                                            loop=self.bot.loop,
-                                            stream=True)
-            if 'entries' in data:
-                # take a playlist
-                newData = data['entries']
-
-        if (len(newData) != 0):
-            random.shuffle(newData)
-
-            async def queue_rest(entries):
-                for ghneya in entries[1:]:
-                    if ghneya is not None:
-                        source = await YTDLSource.getData(
-                            url=ghneya["url"],
-                            loop=self.bot.loop,
-                            stream=True
-                        )
-                        await player.queue.put(source)
-            self.bot.loop.create_task(queue_rest(newData))
-
-        else:
-            source = await YTDLSource.from_url(
-                url=url,
-                loop=self.bot.loop,
-                stream=True
-            )
-            await player.queue.put(source)
+                if source:
+                    await player.queue.put(source)
+                    title = source.title if source.title else query
+                    await ctx.send(f'✅ Queued: `{title}`')
+                else:
+                    await ctx.send("❌ Could not find that video/playlist.")
+        except Exception as e:
+            print(f"Error in stream command: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f"❌ Error: {type(e).__name__}: {e}")
 
     @commands.command(name='volume')
     async def volume(self, ctx, volume: int):
@@ -218,20 +254,22 @@ class Music(commands.Cog):
         player.np = await ctx.send(f'**Now Playing:** `{vc.source.title}` '
                                    f'requested by `{vc.source.requester}`')
     # @play.before_invoke
-
-    @join.before_invoke
     @stream.before_invoke
     @now_playing_.before_invoke
     async def ensure_voice(self, ctx):
+        print(f"ensure_voice called for {ctx.author}")
         if ctx.voice_client is None:
+            print(f"No voice client, checking if author is in voice...")
             if ctx.author.voice:
+                print(f"Author is in voice channel: {ctx.author.voice.channel}")
                 await ctx.author.voice.channel.connect()
+                print(f"Connected to voice channel")
             else:
                 await ctx.send("You are not connected to a voice channel.")
                 raise commands.CommandError(
                     "Author not connected to a voice channel.")
-        # elif ctx.voice_client.is_playing():
-        #     ctx.voice_client.stop()
+        else:
+            print(f"Already have voice client in {ctx.voice_client.channel}")
 
 
 intents = discord.Intents.default()
@@ -248,6 +286,13 @@ bot = commands.Bot(
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
+
+@bot.event
+async def on_command_error(ctx, error):
+    print(f'Command error in {ctx.command}: {type(error).__name__}: {error}')
+    if isinstance(error, commands.CommandNotFound):
+        return
+    await ctx.send(f'❌ Command error: {type(error).__name__}: {error}')
 
 key = "DISCORD_TOKEN"
 
