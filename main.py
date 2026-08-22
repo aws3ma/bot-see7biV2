@@ -13,7 +13,7 @@ from custom_exceptions import InvalidVoiceChannel, VoiceConnectionError
 
 
 class Music(commands.Cog):
-    __slots__ = ('bot', 'players')
+    __slots__ = ('bot', 'players', 'playlist_tasks')
 
     def __init__(self, bot):
         self.bot = bot

@@ -14,7 +14,7 @@ class MusicPlayer:
     """
 
     __slots__ = ('bot', '_guild', '_channel', '_cog', 'queue', 'next',
-                 'current', 'np', 'volume')
+                 'current', 'np', 'volume', 'player_task')
 
     def __init__(self, ctx):
         self.bot = ctx.bot
@@ -29,7 +29,15 @@ class MusicPlayer:
         self.volume = 1.0
         self.current = None
 
-        ctx.bot.loop.create_task(self.player_loop())
+        self.player_task = ctx.bot.loop.create_task(self.player_loop())
+        self.player_task.add_done_callback(self._player_task_finished)
+
+    def _player_task_finished(self, task):
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error:
+            print(f'Player task stopped: {type(error).__name__}: {error}')
 
     async def player_loop(self):
         """Our main player loop."""
@@ -45,6 +53,8 @@ class MusicPlayer:
             except asyncio.TimeoutError:
                 return self.destroy(self._guild)
 
+            print(f'Player received: {getattr(source, "title", "audio source")}')
+
             if not isinstance(source, YTDLSource):
                 # Source was probably a stream (not downloaded)
                 # So we should regather to prevent stream expiration
@@ -56,12 +66,31 @@ class MusicPlayer:
                         f'There was an error processing your song.\n'
                         f'```css\n[{e}]\n```')
                     continue
+
+            voice_client = self._guild.voice_client
+            if voice_client is None or not voice_client.is_connected():
+                await self._channel.send('Playback stopped because I am not connected to voice.')
+                continue
+
             source.volume = self.volume
             self.current = source
 
-            self._guild.voice_client.play(source,
-                                          after=lambda _: self.bot.loop.
-                                          call_soon_threadsafe(self.next.set))
+            def playback_finished(error):
+                if error:
+                    print(f'Playback error: {type(error).__name__}: {error}')
+                self.bot.loop.call_soon_threadsafe(self.next.set)
+
+            try:
+                voice_client.play(source, after=playback_finished)
+            except Exception as error:
+                print(f'Could not start playback: {type(error).__name__}: {error}')
+                await self._channel.send(
+                    f'Could not start playback: `{type(error).__name__}: {error}`')
+                source.cleanup()
+                self.current = None
+                continue
+
+            print(f'Playback started: {source.title}')
             self.np = await self._channel.send(f'**playing :** {source.title}')
             await self.next.wait()
 
